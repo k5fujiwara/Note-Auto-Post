@@ -28,4 +28,4 @@ jobs:
           THREADS_ACCESS_TOKEN_NOTE: ${{ secrets.THREADS_ACCESS_TOKEN_NOTE }}
           THREADS_USER_ID_NOTE: ${{ secrets.THREADS_USER_ID_NOTE }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python main_note.py
+        run: python main.py

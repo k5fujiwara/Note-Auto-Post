@@ -54,23 +54,39 @@ def post_to_threads(text, link=None):
     base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
     auth = {'access_token': THREADS_ACCESS_TOKEN}
     
-    # 1. 親投稿
+    # 1. 親投稿の作成
     res = requests.post(base_url, params={**auth, 'text': text, 'media_type': 'TEXT'}).json()
     parent_id = res.get('id')
-    if not parent_id: return
+    if not parent_id: 
+        print("Error: Parent container creation failed")
+        return
     
-    # 2. 公開
-    requests.post(f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish", 
-                  params={**auth, 'creation_id': parent_id})
+    # 2. 親投稿の公開 (Publish)
+    # ⚠️ ここで取得できる ID が、リプライを紐づけるための「本当の投稿ID」になります
+    publish_res = requests.post(f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish", 
+                                params={**auth, 'creation_id': parent_id}).json()
+    post_id = publish_res.get('id')
+    
+    if not post_id:
+        print("Error: Parent post publishing failed")
+        return
     
     # 3. リプライ（リンクありの場合）
     if link:
-        reply_res = requests.post(base_url, params={
-            **auth, 'text': f"全文はこちら👇\n{link}", 
-            'media_type': 'TEXT', 'reply_to_id': parent_id
+        # ⚠️ reply_to_id には「公開後の post_id」を指定する必要があります
+        reply_container = requests.post(base_url, params={
+            **auth, 
+            'text': f"全文はこちら👇\n{link}", 
+            'media_type': 'TEXT', 
+            'reply_to_id': post_id  # 修正：parent_id から post_id に変更
         }).json()
-        requests.post(f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish", 
-                    params={**auth, 'creation_id': reply_res.get('id')})
+        
+        reply_container_id = reply_container.get('id')
+        if reply_container_id:
+            # リプライも公開処理が必要
+            requests.post(f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish", 
+                        params={**auth, 'creation_id': reply_container_id})
+            print("Successfully posted with reply link.")
 
 if __name__ == "__main__":
     article = get_random_article()

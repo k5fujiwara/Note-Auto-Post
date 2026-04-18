@@ -1,0 +1,31 @@
+name: Post note to Threads
+
+on:
+  schedule:
+    # 日本時間 08:00〜24:00 (UTC 23:00〜15:00) に1時間ごとに実行
+    # 23(JST 8), 0(JST 9), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15(JST 24)
+    - cron: '0 23,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 * * *'
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 最新のライブラリに合わせて3.11推奨
+          
+      - name: Install dependencies
+        run: |
+          # google-generativeai から最新の google-genai に変更
+          pip install requests feedparser google-genai python-dotenv
+          
+      - name: Run post script
+        env:
+          THREADS_ACCESS_TOKEN_NOTE: ${{ secrets.THREADS_ACCESS_TOKEN_NOTE }}
+          THREADS_USER_ID_NOTE: ${{ secrets.THREADS_USER_ID_NOTE }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python main_note.py

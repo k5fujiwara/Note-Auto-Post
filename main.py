@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import feedparser
 import random
 import requests
@@ -12,6 +13,47 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN_NOTE")
 THREADS_USER_ID = os.getenv("THREADS_USER_ID_NOTE")
+
+def wait_for_threads_container(container_id, auth, label, max_checks=6, wait_seconds=10):
+    status_url = f"https://graph.threads.net/v1.0/{container_id}"
+
+    for attempt in range(1, max_checks + 1):
+        print(f"Checking {label} container status ({attempt}/{max_checks}): {container_id}")
+        status_response = requests.get(
+            status_url,
+            params={**auth, "fields": "status,error_message"},
+            timeout=30,
+        )
+        print(f"{label} container status HTTP: {status_response.status_code}")
+        print(f"{label} container status response: {status_response.text}")
+
+        try:
+            status_body = status_response.json()
+        except ValueError:
+            print(f"Error: {label} container status response was not valid JSON.")
+            return False
+
+        status = status_body.get("status")
+        error_message = status_body.get("error_message")
+
+        if status == "FINISHED":
+            print(f"{label} container is ready to publish.")
+            return True
+
+        if status in {"ERROR", "EXPIRED"}:
+            print(f"Error: {label} container status is {status}. detail={error_message}")
+            return False
+
+        if status == "PUBLISHED":
+            print(f"{label} container is already published.")
+            return True
+
+        if attempt < max_checks:
+            print(f"{label} container status is {status}. Waiting {wait_seconds} seconds before retry.")
+            time.sleep(wait_seconds)
+
+    print(f"Error: {label} container was not ready after {max_checks} checks.")
+    return False
 
 def get_random_article():
     RSS_URL = "https://note.com/k5fujiwara/rss"
@@ -96,6 +138,9 @@ def post_to_threads(text, link=None):
     if not parent_id: 
         print("Error: Parent container creation failed")
         return False
+
+    if not wait_for_threads_container(parent_id, auth, "Parent"):
+        return False
     
     # 2. 親投稿の公開 (Publish)
     # ⚠️ ここで取得できる ID が、リプライを紐づけるための「本当の投稿ID」になります
@@ -148,6 +193,9 @@ def post_to_threads(text, link=None):
         reply_container_id = reply_container.get('id')
         if not reply_container_id:
             print("Error: Reply container creation failed")
+            return False
+
+        if not wait_for_threads_container(reply_container_id, auth, "Reply"):
             return False
 
         # リプライも公開処理が必要

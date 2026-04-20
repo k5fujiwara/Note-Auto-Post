@@ -13,6 +13,16 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN_NOTE")
 THREADS_USER_ID = os.getenv("THREADS_USER_ID_NOTE")
+DEFAULT_GEMINI_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+]
+
+def get_gemini_models():
+    raw_models = os.getenv("GEMINI_MODELS", "")
+    models = [model.strip() for model in raw_models.split(",") if model.strip()]
+    return models or DEFAULT_GEMINI_MODELS.copy()
 
 def is_retryable_gemini_error(error):
     message = str(error).upper()
@@ -94,9 +104,8 @@ def generate_summary(article, has_reply):
         return None
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    
-    # 確認した最新モデル ID を指定
-    model_id = "gemini-2.5-flash"
+    model_ids = get_gemini_models()
+    print(f"Configured Gemini models: {', '.join(model_ids)}")
 
     footer_inst = (
         "文末は、必ず『続きはリプライからどうぞ👇』という誘導にしてください。" 
@@ -118,31 +127,45 @@ def generate_summary(article, has_reply):
     
     max_attempts = 4
     base_wait_seconds = 5
+    last_error = None
 
-    for attempt in range(1, max_attempts + 1):
-        try:
-            print(f"Generating summary with Gemini model: {model_id} (attempt {attempt}/{max_attempts})")
-            response = client.models.generate_content(model=model_id, contents=prompt)
+    for model_index, model_id in enumerate(model_ids, start=1):
+        print(f"Trying Gemini model {model_index}/{len(model_ids)}: {model_id}")
 
-            if not getattr(response, "text", None):
-                print(f"Gemini response was empty on attempt {attempt}.")
-                return None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                print(f"Generating summary with Gemini model: {model_id} (attempt {attempt}/{max_attempts})")
+                response = client.models.generate_content(model=model_id, contents=prompt)
 
-            return response.text.strip()
-        except Exception as e:
-            print(f"Gemini API Error ({model_id}) on attempt {attempt}: {e}")
+                if not getattr(response, "text", None):
+                    print(f"Gemini response was empty on model {model_id}.")
+                    break
 
-            if not is_retryable_gemini_error(e):
-                print("Gemini error is not retryable. Stopping retries.")
-                return None
+                print(f"Summary generated successfully with Gemini model: {model_id}")
+                return response.text.strip()
+            except Exception as e:
+                last_error = e
+                print(f"Gemini API Error ({model_id}) on attempt {attempt}: {e}")
 
-            if attempt == max_attempts:
-                print("Gemini retry limit reached.")
-                return None
+                if not is_retryable_gemini_error(e):
+                    print(f"Gemini error for {model_id} is not retryable. Switching models if available.")
+                    break
 
-            wait_seconds = base_wait_seconds * (2 ** (attempt - 1)) + random.randint(0, 2)
-            print(f"Retrying Gemini after {wait_seconds} seconds.")
-            time.sleep(wait_seconds)
+                if attempt == max_attempts:
+                    print(f"Gemini retry limit reached for {model_id}.")
+                    break
+
+                wait_seconds = base_wait_seconds * (2 ** (attempt - 1)) + random.randint(0, 2)
+                print(f"Retrying Gemini after {wait_seconds} seconds.")
+                time.sleep(wait_seconds)
+
+        if model_index < len(model_ids):
+            print(f"Falling back from {model_id} to the next Gemini model.")
+
+    if last_error:
+        print(f"Error: All Gemini models failed. Last error: {last_error}")
+    else:
+        print("Error: All Gemini models failed without returning text.")
 
     return None
 

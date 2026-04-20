@@ -33,5 +33,6 @@ jobs:
           THREADS_ACCESS_TOKEN_NOTE: ${{ secrets.THREADS_ACCESS_TOKEN_NOTE }}
           THREADS_USER_ID_NOTE: ${{ secrets.THREADS_USER_ID_NOTE }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODELS: ${{ vars.GEMINI_MODELS }}
         # ファイル名が main_note.py であることを確認してください
         run: python main.py

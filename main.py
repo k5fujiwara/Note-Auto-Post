@@ -14,6 +14,21 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN_NOTE")
 THREADS_USER_ID = os.getenv("THREADS_USER_ID_NOTE")
 
+def is_retryable_gemini_error(error):
+    message = str(error).upper()
+    retryable_markers = [
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "RESOURCE_EXHAUSTED",
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "INTERNAL",
+    ]
+    return any(marker in message for marker in retryable_markers)
+
 def wait_for_threads_container(container_id, auth, label, max_checks=6, wait_seconds=10):
     status_url = f"https://graph.threads.net/v1.0/{container_id}"
 
@@ -101,13 +116,35 @@ def generate_summary(article, has_reply):
     4. 最後に空行を入れ、{footer_inst}
     """
     
-    try:
-        print(f"Generating summary with Gemini model: {model_id}")
-        response = client.models.generate_content(model=model_id, contents=prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Gemini API Error ({model_id}): {e}")
-        return None
+    max_attempts = 4
+    base_wait_seconds = 5
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            print(f"Generating summary with Gemini model: {model_id} (attempt {attempt}/{max_attempts})")
+            response = client.models.generate_content(model=model_id, contents=prompt)
+
+            if not getattr(response, "text", None):
+                print(f"Gemini response was empty on attempt {attempt}.")
+                return None
+
+            return response.text.strip()
+        except Exception as e:
+            print(f"Gemini API Error ({model_id}) on attempt {attempt}: {e}")
+
+            if not is_retryable_gemini_error(e):
+                print("Gemini error is not retryable. Stopping retries.")
+                return None
+
+            if attempt == max_attempts:
+                print("Gemini retry limit reached.")
+                return None
+
+            wait_seconds = base_wait_seconds * (2 ** (attempt - 1)) + random.randint(0, 2)
+            print(f"Retrying Gemini after {wait_seconds} seconds.")
+            time.sleep(wait_seconds)
+
+    return None
 
 def post_to_threads(text, link=None):
     if not THREADS_ACCESS_TOKEN or not THREADS_USER_ID:

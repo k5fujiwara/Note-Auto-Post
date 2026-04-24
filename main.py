@@ -39,6 +39,12 @@ def is_retryable_gemini_error(error):
     ]
     return any(marker in message for marker in retryable_markers)
 
+def is_retryable_threads_publish_error(response_body):
+    error = response_body.get("error", {})
+    if error.get("code") != 24:
+        return False
+    return error.get("error_subcode") == 4279009
+
 def wait_for_threads_container(container_id, auth, label, max_checks=6, wait_seconds=10):
     status_url = f"https://graph.threads.net/v1.0/{container_id}"
 
@@ -79,6 +85,39 @@ def wait_for_threads_container(container_id, auth, label, max_checks=6, wait_sec
 
     print(f"Error: {label} container was not ready after {max_checks} checks.")
     return False
+
+def publish_threads_container(container_id, auth, label, max_attempts=4, wait_seconds=5):
+    publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"Publishing Threads {label}: creation_id={container_id} (attempt {attempt}/{max_attempts})")
+        publish_response = requests.post(
+            publish_url,
+            params={**auth, 'creation_id': container_id},
+            timeout=30,
+        )
+        print(f"Threads {label} publish status: {publish_response.status_code}")
+        print(f"Threads {label} publish response: {publish_response.text}")
+
+        try:
+            publish_body = publish_response.json()
+        except ValueError:
+            print(f"Error: {label} publish response was not valid JSON.")
+            return None
+
+        publish_id = publish_body.get('id')
+        if publish_id:
+            print(f"Threads {label} published successfully.")
+            return publish_id
+
+        if attempt == max_attempts or not is_retryable_threads_publish_error(publish_body):
+            print(f"Error: {label} publish failed without a retryable response.")
+            return None
+
+        print(f"{label} publish hit Media Not Found. Waiting {wait_seconds} seconds before retry.")
+        time.sleep(wait_seconds)
+
+    return None
 
 def get_random_article():
     RSS_URL = "https://note.com/k5fujiwara/rss"
@@ -204,24 +243,7 @@ def post_to_threads(text, link=None):
     
     # 2. 親投稿の公開 (Publish)
     # ⚠️ ここで取得できる ID が、リプライを紐づけるための「本当の投稿ID」になります
-    print(f"Publishing Threads parent post: creation_id={parent_id}")
-    publish_response = requests.post(
-        f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish",
-        params={**auth, 'creation_id': parent_id},
-        timeout=30,
-    )
-    print(f"Threads publish status: {publish_response.status_code}")
-    publish_body = publish_response.text
-    print(f"Threads publish response: {publish_body}")
-
-    try:
-        publish_res = publish_response.json()
-    except ValueError:
-        print("Error: Parent publish response was not valid JSON.")
-        return False
-
-    post_id = publish_res.get('id')
-    
+    post_id = publish_threads_container(parent_id, auth, "parent post")
     if not post_id:
         print("Error: Parent post publishing failed")
         return False
@@ -259,22 +281,8 @@ def post_to_threads(text, link=None):
             return False
 
         # リプライも公開処理が必要
-        reply_publish_response = requests.post(
-            f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish",
-            params={**auth, 'creation_id': reply_container_id},
-            timeout=30,
-        )
-        print(f"Threads reply publish status: {reply_publish_response.status_code}")
-        reply_publish_body = reply_publish_response.text
-        print(f"Threads reply publish response: {reply_publish_body}")
-
-        try:
-            reply_publish = reply_publish_response.json()
-        except ValueError:
-            print("Error: Reply publish response was not valid JSON.")
-            return False
-
-        if not reply_publish.get('id'):
+        reply_publish_id = publish_threads_container(reply_container_id, auth, "reply post")
+        if not reply_publish_id:
             print("Error: Reply publish failed")
             return False
 

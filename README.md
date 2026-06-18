@@ -134,6 +134,26 @@ Gemini 側の高負荷です。現在は自動再試行し、それでも失敗�
 
 コンテナ作成直後に publish すると起きることがあります。現在は状態確認後に publish するため、以前より起きにくくなっています。
 
+### Threads の `Error validating access token`
+
+Threads API のアクセストークンが期限切れ、または無効になった場合に発生します。ログに以下のような内容が出た場合は、`THREADS_ACCESS_TOKEN_NOTE` の更新が必要です。
+
+```text
+Error validating access token: Session has expired ...
+OAuthException
+code: 190
+```
+
+GitHub Actions で利用している値はローカルの `.env` ではなく、GitHub Secrets の `THREADS_ACCESS_TOKEN_NOTE` です。新しい Threads アクセストークンを取得したら、GitHub のリポジトリ設定から次の手順で更新します。
+
+1. GitHub リポジトリの `Settings` を開く
+2. `Secrets and variables` を開く
+3. `Actions` を選択する
+4. `Secrets` の `THREADS_ACCESS_TOKEN_NOTE` を更新する
+5. `Actions` から `Post note to Threads` を手動実行して確認する
+
+ローカル実行も行う場合は、プロジェクト直下の `.env` にある `THREADS_ACCESS_TOKEN_NOTE` も同じ新しい値に更新します。
+
 ### GitHub Actions が想定時刻に動かない
 
 GitHub Actions の `schedule` は厳密な定刻実行ではありません。高負荷時は遅延することがあります。

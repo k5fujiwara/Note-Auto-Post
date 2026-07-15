@@ -85,15 +85,47 @@ def is_retryable_threads_publish_error(response_body):
 def is_retryable_threads_status(status_code):
     return status_code == 429 or 500 <= status_code <= 504
 
+def resolve_threads_user_id(auth):
+    print("Validating Threads token with /me...")
+    me_response = requests.get(
+        "https://graph.threads.net/v1.0/me",
+        params={**auth, "fields": "id,username"},
+        timeout=30,
+    )
+    print(f"Threads /me status: {me_response.status_code}")
+    print(f"Threads /me response: {me_response.text}")
+
+    try:
+        me_body = me_response.json()
+    except ValueError:
+        print("Error: Threads /me response was not valid JSON.")
+        return None
+
+    resolved_user_id = me_body.get("id")
+    if not resolved_user_id:
+        print("Error: Threads /me did not return a user id.")
+        return None
+
+    username = me_body.get("username", "unknown")
+    print(f"Resolved Threads user: id={resolved_user_id}, username={username}")
+
+    if THREADS_USER_ID and THREADS_USER_ID != resolved_user_id:
+        print("Warning: THREADS_USER_ID_NOTE differs from the token's /me id. Using /me id for this run.")
+
+    return resolved_user_id
+
 def create_threads_container(base_url, auth, params, label, max_attempts=4, wait_seconds=5):
     for attempt in range(1, max_attempts + 1):
         print(f"Creating Threads {label} container (attempt {attempt}/{max_attempts})...")
         payload = {**auth, **params}
+        transport = "body" if attempt % 2 == 1 else "query"
+        print(f"Threads {label} create transport: {transport}")
 
         try:
+            request_kwargs = {"data": payload} if transport == "body" else {"params": payload}
             create_response = requests.post(
                 base_url,
-                data=payload,
+                **request_kwargs,
                 timeout=30,
             )
         except requests.RequestException as e:
@@ -172,14 +204,18 @@ def wait_for_threads_container(container_id, auth, label, max_checks=6, wait_sec
     print(f"Error: {label} container was not ready after {max_checks} checks.")
     return False
 
-def publish_threads_container(container_id, auth, label, max_attempts=4, wait_seconds=5):
-    publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
+def publish_threads_container(user_id, container_id, auth, label, max_attempts=4, wait_seconds=5):
+    publish_url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
 
     for attempt in range(1, max_attempts + 1):
         print(f"Publishing Threads {label}: creation_id={container_id} (attempt {attempt}/{max_attempts})")
+        payload = {**auth, 'creation_id': container_id}
+        transport = "body" if attempt % 2 == 1 else "query"
+        print(f"Threads {label} publish transport: {transport}")
+        request_kwargs = {"data": payload} if transport == "body" else {"params": payload}
         publish_response = requests.post(
             publish_url,
-            data={**auth, 'creation_id': container_id},
+            **request_kwargs,
             timeout=30,
         )
         print(f"Threads {label} publish status: {publish_response.status_code}")
@@ -300,8 +336,12 @@ def post_to_threads(text, link=None):
         print("Error: Threads credentials are not set.")
         return False
 
-    base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
     auth = {'access_token': THREADS_ACCESS_TOKEN}
+    resolved_user_id = resolve_threads_user_id(auth)
+    if not resolved_user_id:
+        return False
+
+    base_url = f"https://graph.threads.net/v1.0/{resolved_user_id}/threads"
     parent_text = fit_threads_text(text, "Parent post")
     
     # 1. 親投稿の作成
@@ -325,15 +365,28 @@ def post_to_threads(text, link=None):
         )
 
         if not parent_id:
-            print("Error: Parent container creation failed")
-            return False
+            print("Parent fallback container creation failed. Retrying once with a minimal safe text.")
+            minimal_text = "noteの記事を更新しました。"
+            print(f"Parent minimal fallback text length: {len(minimal_text)} chars / {len(minimal_text.encode('utf-8'))} bytes")
+            parent_id = create_threads_container(
+                base_url,
+                auth,
+                {'text': minimal_text, 'media_type': 'TEXT'},
+                "parent post minimal fallback",
+                max_attempts=2,
+                wait_seconds=10,
+            )
+
+            if not parent_id:
+                print("Error: Parent container creation failed")
+                return False
 
     if not wait_for_threads_container(parent_id, auth, "Parent"):
         return False
     
     # 2. 親投稿の公開 (Publish)
     # ⚠️ ここで取得できる ID が、リプライを紐づけるための「本当の投稿ID」になります
-    post_id = publish_threads_container(parent_id, auth, "parent post")
+    post_id = publish_threads_container(resolved_user_id, parent_id, auth, "parent post")
     if not post_id:
         print("Error: Parent post publishing failed")
         return False
@@ -360,7 +413,7 @@ def post_to_threads(text, link=None):
             return False
 
         # リプライも公開処理が必要
-        reply_publish_id = publish_threads_container(reply_container_id, auth, "reply post")
+        reply_publish_id = publish_threads_container(resolved_user_id, reply_container_id, auth, "reply post")
         if not reply_publish_id:
             print("Error: Reply publish failed")
             return False

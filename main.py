@@ -45,6 +45,54 @@ def is_retryable_threads_publish_error(response_body):
         return False
     return error.get("error_subcode") == 4279009
 
+def is_retryable_threads_status(status_code):
+    return status_code == 429 or 500 <= status_code <= 504
+
+def create_threads_container(base_url, auth, params, label, max_attempts=4, wait_seconds=5):
+    for attempt in range(1, max_attempts + 1):
+        print(f"Creating Threads {label} container (attempt {attempt}/{max_attempts})...")
+
+        try:
+            create_response = requests.post(
+                base_url,
+                params={**auth, **params},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            print(f"Threads {label} create request error: {e}")
+            if attempt == max_attempts:
+                return None
+            print(f"Retrying Threads {label} container creation after {wait_seconds} seconds.")
+            time.sleep(wait_seconds)
+            continue
+
+        print(f"Threads {label} create status: {create_response.status_code}")
+        print(f"Threads {label} create response: {create_response.text}")
+
+        try:
+            create_body = create_response.json()
+        except ValueError:
+            if attempt == max_attempts or not is_retryable_threads_status(create_response.status_code):
+                print(f"Error: {label} container response was not valid JSON.")
+                return None
+
+            print(f"Threads {label} create returned a retryable non-JSON response. Waiting {wait_seconds} seconds.")
+            time.sleep(wait_seconds)
+            continue
+
+        container_id = create_body.get('id')
+        if container_id:
+            return container_id
+
+        if attempt == max_attempts or not is_retryable_threads_status(create_response.status_code):
+            print(f"Error: {label} container creation failed.")
+            return None
+
+        print(f"Threads {label} create failed with retryable status. Waiting {wait_seconds} seconds.")
+        time.sleep(wait_seconds)
+
+    return None
+
 def wait_for_threads_container(container_id, auth, label, max_checks=6, wait_seconds=10):
     status_url = f"https://graph.threads.net/v1.0/{container_id}"
 
@@ -217,23 +265,12 @@ def post_to_threads(text, link=None):
     auth = {'access_token': THREADS_ACCESS_TOKEN}
     
     # 1. 親投稿の作成
-    print("Creating Threads parent post container...")
-    create_response = requests.post(
+    parent_id = create_threads_container(
         base_url,
-        params={**auth, 'text': text, 'media_type': 'TEXT'},
-        timeout=30,
+        auth,
+        {'text': text, 'media_type': 'TEXT'},
+        "parent post",
     )
-    print(f"Threads create status: {create_response.status_code}")
-    create_body = create_response.text
-    print(f"Threads create response: {create_body}")
-
-    try:
-        res = create_response.json()
-    except ValueError:
-        print("Error: Parent container response was not valid JSON.")
-        return False
-
-    parent_id = res.get('id')
     if not parent_id: 
         print("Error: Parent container creation failed")
         return False
@@ -251,28 +288,16 @@ def post_to_threads(text, link=None):
     # 3. リプライ（リンクありの場合）
     if link:
         # ⚠️ reply_to_id には「公開後の post_id」を指定する必要があります
-        print(f"Creating reply container for post_id={post_id}")
-        reply_response = requests.post(
+        reply_container_id = create_threads_container(
             base_url,
-            params={
-                **auth,
+            auth,
+            {
                 'text': f"全文はこちら👇\n{link}",
                 'media_type': 'TEXT',
                 'reply_to_id': post_id  # 修正：parent_id から post_id に変更
             },
-            timeout=30,
+            "reply post",
         )
-        print(f"Threads reply create status: {reply_response.status_code}")
-        reply_body = reply_response.text
-        print(f"Threads reply create response: {reply_body}")
-
-        try:
-            reply_container = reply_response.json()
-        except ValueError:
-            print("Error: Reply container response was not valid JSON.")
-            return False
-        
-        reply_container_id = reply_container.get('id')
         if not reply_container_id:
             print("Error: Reply container creation failed")
             return False

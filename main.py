@@ -1,6 +1,8 @@
 import os
+import re
 import sys
 import time
+import unicodedata
 import feedparser
 import random
 import requests
@@ -27,8 +29,8 @@ def get_gemini_models():
     return models or DEFAULT_GEMINI_MODELS.copy()
 
 def fit_threads_text(text, label, limit=THREADS_SAFE_TEXT_LIMIT):
-    normalized_text = text.strip()
-    print(f"{label} text length: {len(normalized_text)} chars")
+    normalized_text = sanitize_threads_text(text)
+    print(f"{label} text length: {len(normalized_text)} chars / {len(normalized_text.encode('utf-8'))} bytes")
 
     if len(normalized_text) <= limit:
         return normalized_text
@@ -37,6 +39,27 @@ def fit_threads_text(text, label, limit=THREADS_SAFE_TEXT_LIMIT):
     trimmed_text = normalized_text[:limit - len(suffix)].rstrip()
     print(f"Warning: {label} text exceeded {limit} chars. Trimming before Threads API request.")
     return f"{trimmed_text}{suffix}"
+
+def sanitize_threads_text(text):
+    normalized_text = unicodedata.normalize("NFKC", text)
+    normalized_text = normalized_text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized_text = re.sub(r"[\u200b-\u200f\ufeff]", "", normalized_text)
+    normalized_text = "".join(
+        char for char in normalized_text
+        if char == "\n" or char == "\t" or unicodedata.category(char)[0] != "C"
+    )
+    normalized_text = re.sub(r"[ \t]+\n", "\n", normalized_text)
+    normalized_text = re.sub(r"\n{3,}", "\n\n", normalized_text)
+    return normalized_text.strip()
+
+def make_fallback_threads_text(text, limit=180):
+    fallback_text = sanitize_threads_text(text)
+    fallback_text = re.sub(r"\s+", " ", fallback_text).strip()
+
+    if len(fallback_text) <= limit:
+        return fallback_text
+
+    return f"{fallback_text[:limit - 3].rstrip()}..."
 
 def is_retryable_gemini_error(error):
     message = str(error).upper()
@@ -65,11 +88,12 @@ def is_retryable_threads_status(status_code):
 def create_threads_container(base_url, auth, params, label, max_attempts=4, wait_seconds=5):
     for attempt in range(1, max_attempts + 1):
         print(f"Creating Threads {label} container (attempt {attempt}/{max_attempts})...")
+        payload = {**auth, **params}
 
         try:
             create_response = requests.post(
                 base_url,
-                params={**auth, **params},
+                data=payload,
                 timeout=30,
             )
         except requests.RequestException as e:
@@ -155,7 +179,7 @@ def publish_threads_container(container_id, auth, label, max_attempts=4, wait_se
         print(f"Publishing Threads {label}: creation_id={container_id} (attempt {attempt}/{max_attempts})")
         publish_response = requests.post(
             publish_url,
-            params={**auth, 'creation_id': container_id},
+            data={**auth, 'creation_id': container_id},
             timeout=30,
         )
         print(f"Threads {label} publish status: {publish_response.status_code}")
@@ -288,8 +312,21 @@ def post_to_threads(text, link=None):
         "parent post",
     )
     if not parent_id: 
-        print("Error: Parent container creation failed")
-        return False
+        print("Parent container creation failed. Retrying once with a compact fallback text.")
+        fallback_text = make_fallback_threads_text(parent_text)
+        print(f"Parent fallback text length: {len(fallback_text)} chars / {len(fallback_text.encode('utf-8'))} bytes")
+        parent_id = create_threads_container(
+            base_url,
+            auth,
+            {'text': fallback_text, 'media_type': 'TEXT'},
+            "parent post fallback",
+            max_attempts=2,
+            wait_seconds=10,
+        )
+
+        if not parent_id:
+            print("Error: Parent container creation failed")
+            return False
 
     if not wait_for_threads_container(parent_id, auth, "Parent"):
         return False

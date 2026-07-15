@@ -18,11 +18,25 @@ DEFAULT_GEMINI_MODELS = [
     "gemini-2.5-flash-lite",
     "gemini-2.0-flash",
 ]
+THREADS_TEXT_LIMIT = 500
+THREADS_SAFE_TEXT_LIMIT = 450
 
 def get_gemini_models():
     raw_models = os.getenv("GEMINI_MODELS", "")
     models = [model.strip() for model in raw_models.split(",") if model.strip()]
     return models or DEFAULT_GEMINI_MODELS.copy()
+
+def fit_threads_text(text, label, limit=THREADS_SAFE_TEXT_LIMIT):
+    normalized_text = text.strip()
+    print(f"{label} text length: {len(normalized_text)} chars")
+
+    if len(normalized_text) <= limit:
+        return normalized_text
+
+    suffix = "..."
+    trimmed_text = normalized_text[:limit - len(suffix)].rstrip()
+    print(f"Warning: {label} text exceeded {limit} chars. Trimming before Threads API request.")
+    return f"{trimmed_text}{suffix}"
 
 def is_retryable_gemini_error(error):
     message = str(error).upper()
@@ -209,7 +223,8 @@ def generate_summary(article, has_reply):
     1. 1行目は強烈なフック。その後必ず空行。
     2. 箇条書きに頼らず、ストーリーを感じさせる短文で構成。
     3. 視覚的な「白さ（余白）」を大切にする。
-    4. 最後に空行を入れ、{footer_inst}
+    4. 投稿本文は必ず450文字以内にする。
+    5. 最後に空行を入れ、{footer_inst}
     """
     
     max_attempts = 4
@@ -229,7 +244,7 @@ def generate_summary(article, has_reply):
                     break
 
                 print(f"Summary generated successfully with Gemini model: {model_id}")
-                return response.text.strip()
+                return fit_threads_text(response.text, "Generated summary")
             except Exception as e:
                 last_error = e
                 print(f"Gemini API Error ({model_id}) on attempt {attempt}: {e}")
@@ -263,12 +278,13 @@ def post_to_threads(text, link=None):
 
     base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
     auth = {'access_token': THREADS_ACCESS_TOKEN}
+    parent_text = fit_threads_text(text, "Parent post")
     
     # 1. 親投稿の作成
     parent_id = create_threads_container(
         base_url,
         auth,
-        {'text': text, 'media_type': 'TEXT'},
+        {'text': parent_text, 'media_type': 'TEXT'},
         "parent post",
     )
     if not parent_id: 
@@ -288,11 +304,12 @@ def post_to_threads(text, link=None):
     # 3. リプライ（リンクありの場合）
     if link:
         # ⚠️ reply_to_id には「公開後の post_id」を指定する必要があります
+        reply_text = fit_threads_text(f"全文はこちら👇\n{link}", "Reply post")
         reply_container_id = create_threads_container(
             base_url,
             auth,
             {
-                'text': f"全文はこちら👇\n{link}",
+                'text': reply_text,
                 'media_type': 'TEXT',
                 'reply_to_id': post_id  # 修正：parent_id から post_id に変更
             },

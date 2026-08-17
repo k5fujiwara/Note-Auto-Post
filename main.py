@@ -89,7 +89,7 @@ def resolve_threads_user_id(auth):
     print("Validating Threads token with /me...")
     me_response = requests.get(
         "https://graph.threads.net/v1.0/me",
-        params={**auth, "fields": "id,username"},
+        params={**auth, "fields": "id"},
         timeout=30,
     )
     print(f"Threads /me status: {me_response.status_code}")
@@ -106,8 +106,7 @@ def resolve_threads_user_id(auth):
         print("Error: Threads /me did not return a user id.")
         return None
 
-    username = me_body.get("username", "unknown")
-    print(f"Resolved Threads user: id={resolved_user_id}, username={username}")
+    print(f"Resolved Threads user: id={resolved_user_id}")
 
     if THREADS_USER_ID and THREADS_USER_ID != resolved_user_id:
         print("Warning: THREADS_USER_ID_NOTE differs from the token's /me id. Using /me id for this run.")

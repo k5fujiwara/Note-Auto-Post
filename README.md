@@ -154,6 +154,12 @@ GitHub Actions で利用している値はローカルの `.env` ではなく、
 
 ローカル実行も行う場合は、プロジェクト直下の `.env` にある `THREADS_ACCESS_TOKEN_NOTE` も同じ新しい値に更新します。
 
+トークン確認時は、`username` フィールドを指定せず `id` のみ確認します。API バージョンによっては `username` が非推奨エラーになるためです。
+
+```text
+https://graph.threads.net/v1.0/me?fields=id&access_token=取得したトークン
+```
+
 ### GitHub Actions が想定時刻に動かない
 
 GitHub Actions の `schedule` は厳密な定刻実行ではありません。高負荷時は遅延することがあります。
